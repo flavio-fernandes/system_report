@@ -1,6 +1,8 @@
 # system_report
 #### Python based service that periodically reports Linux system state over MQTT
 
+[![tests](https://github.com/flavio-fernandes/system_report/actions/workflows/tests.yml/badge.svg)](https://github.com/flavio-fernandes/system_report/actions/workflows/tests.yml)
+
 ## Goals
 
 - Publish how much memory a machine has left, forever, without babysitting
@@ -294,6 +296,24 @@ PYTHONPATH=. ./env/bin/python -m pytest system_report/tests/unit
 ```
 
 Or with tox, if you have it: `tox`.
+
+### Continuous integration
+
+[.github/workflows/tests.yml](.github/workflows/tests.yml) runs on every push and
+pull request to `main`:
+
+| Job | What it covers |
+|---|---|
+| Python 3.6 | pytest and flake8 inside the `python:3.6-slim` container — the interpreter this is actually deployed on, and the one GitHub's runners no longer ship |
+| Python 3.9 / 3.11 / 3.13 / latest stable | the same tests against paho-mqtt 2.x, which proves the callback-API shim rather than just claiming it. The last entry is `3.x`, so it follows each new release by itself |
+| Python pre-release | the next Python, early. Allowed to fail: a beta breaking a dependency should not turn the repo red |
+| hygiene | `bash -n` on every script, plus the promise this project makes about secrets: only `*.example` files under `data/`, and no inline password anywhere in the tree |
+
+To reproduce the 3.6 job locally, if you have docker:
+
+```bash
+docker run --rm -v "${PWD}:/src" -w /src python:3.6-slim sh -exc 'pip install -r requirements.txt -r test_requirements.txt && python -m pytest system_report/tests/unit -q && python -m flake8 system_report'
+```
 
 The tests are pure and fast (no broker, no sleeping, no `/proc`): the parsers
 take text, the scheduler takes a fake clock, and the publisher takes a fake MQTT

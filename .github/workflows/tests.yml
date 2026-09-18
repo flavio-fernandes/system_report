@@ -1,0 +1,130 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python36:
+    # The interpreter this project is actually deployed on (Ubuntu 18.04 ships
+    # Python 3.6.9), so it is the one that has to stay green.
+    #
+    # Note the plain `docker run` instead of a job-level `container:`. GitHub
+    # injects its own Node runtime into container jobs, and recent versions of
+    # it will not start against the old glibc in a python:3.6 image. Checking
+    # out on the host and mounting the tree sidesteps that entirely.
+    name: Python 3.6 (deployment target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: pytest and flake8 inside python:3.6
+        run: |
+          docker run --rm \
+            --volume "${PWD}:/src" \
+            --workdir /src \
+            --env PYTHONDONTWRITEBYTECODE=1 \
+            --env PIP_DISABLE_PIP_VERSION_CHECK=1 \
+            python:3.6-slim \
+            sh -exc '
+              pip install --no-cache-dir -r requirements.txt -r test_requirements.txt
+              pip list
+              python -m pytest system_report/tests/unit -q -p no:cacheprovider
+              python -m flake8 system_report
+            '
+
+  modern-python:
+    # paho-mqtt 2.x changed its callback API. These runs prove the
+    # compatibility shim in mqttclient.py really works, rather than just
+    # claiming it in the README.
+    #
+    # "3.x" is not a typo: setup-python resolves it to the newest stable
+    # release, so this keeps testing the latest and greatest without anyone
+    # remembering to bump a number here every October.
+    name: Python ${{ matrix.python-version }} (paho-mqtt 2.x)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.13", "3.x"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        id: setup
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: install
+        run: |
+          echo "resolved to Python ${{ steps.setup.outputs.python-version }}"
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r test_requirements.txt
+          python -m pip list
+
+      - name: pytest
+        run: python -m pytest system_report/tests/unit -q
+
+  prerelease-python:
+    # Early warning for the next Python, before it is anyone's problem. It is
+    # allowed to fail: a beta breaking a dependency should not turn the repo
+    # red.
+    name: Python pre-release (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        id: setup
+        with:
+          python-version: "3.x"
+          allow-prereleases: true
+
+      - name: install and test
+        run: |
+          echo "resolved to Python ${{ steps.setup.outputs.python-version }}"
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r test_requirements.txt
+          python -m pytest system_report/tests/unit -q
+
+  hygiene:
+    # This project's promise is that secrets cannot end up in the repo. A
+    # promise worth making is worth testing.
+    name: shell syntax and secret guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shell scripts parse
+        run: |
+          for script in system_report/bin/*.sh; do
+            bash -n "${script}"
+          done
+
+      - name: only example files are committed under data/
+        run: |
+          committed="$(git ls-files data/ | grep -v '\.example$' || true)"
+          if [ -n "${committed}" ]; then
+            echo "::error::non-example file(s) committed under data/: ${committed}"
+            exit 1
+          fi
+
+      - name: no inline secrets in tracked files
+        run: |
+          hits="$(git grep -nIiE \
+            '^[[:space:]]*(password|passwd|token|api[_-]?key)[[:space:]]*:[[:space:]]*[^[:space:]#]' \
+            -- . ':!*.example' || true)"
+          # `password: null` (and friends) are placeholders, not secrets.
+          hits="$(printf '%s' "${hits}" | grep -vEi ':[[:space:]]*(null|~|""|'\'''\'')[[:space:]]*$' || true)"
+          if [ -n "${hits}" ]; then
+            echo "${hits}"
+            echo "::error::the line(s) above look like a committed secret"
+            exit 1
+          fi
