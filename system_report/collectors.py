@@ -119,6 +119,9 @@ def collect(fields=None, reader=read_text, want_uptime=True, want_meminfo=True,
             errors.append("{}: {}".format(const.PROC_MEMINFO, e))
 
     return Snapshot(
+        # Timezone-aware rather than utcnow(): the latter is deprecated from
+        # 3.12 on and slated for removal, and datetime.UTC is 3.11+, so
+        # timezone.utc is the spelling that works on 3.6 and on 3.14 alike.
         ts=now or datetime.now(timezone.utc),
         hostname=hostname or socket.gethostname(),
         uptime_s=uptime_s,
