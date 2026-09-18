@@ -1,15 +1,53 @@
 import os
+import shutil
 import socket
+import sys
+import tempfile
 
 import pytest
 
 from system_report import sdnotify
 
+# A unix socket address is capped by sun_path: 104 bytes on macOS/BSD, 108 on
+# Linux. Stay well clear of the smaller one.
+SUN_PATH_BUDGET = 100
+
+LINUX_ONLY = pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="abstract-namespace unix sockets exist only on Linux",
+)
+
 
 @pytest.fixture
-def listener(tmp_path):
+def sock_dir():
+    """A scratch directory whose path is short enough to hold a socket.
+
+    Deliberately not pytest's tmp_path: on macOS that expands to something like
+    /private/var/folders/<hash>/T/pytest-of-<user>/pytest-N/<test-name>0/, and
+    this file's test names are long, so the socket path overruns sun_path and
+    bind() fails before the test does anything.
+    """
+    parent = tempfile.gettempdir()
+    if len(parent) > 40:                     # macOS /var/folders/... is long
+        parent = "/tmp"
+    path = tempfile.mkdtemp(prefix="sysrep-", dir=parent)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def socket_path(directory, name="notify.sock"):
+    """Join, and fail loudly rather than with an obscure bind() error."""
+    path = os.path.join(directory, name)
+    assert len(path) < SUN_PATH_BUDGET, "socket path too long for sun_path: " + path
+    return path
+
+
+@pytest.fixture
+def listener(sock_dir):
     """A real unix datagram socket standing in for systemd's."""
-    path = os.path.join(str(tmp_path), "notify.sock")
+    path = socket_path(sock_dir)
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     sock.bind(path)
     sock.settimeout(2)
@@ -69,7 +107,8 @@ def test_a_garbled_watchdog_value_is_ignored(listener):
     assert sdnotify.Notifier(env=env).watchdog_interval_secs is None
 
 
-def test_abstract_namespace_addresses_are_understood(tmp_path):
+@LINUX_ONLY
+def test_abstract_namespace_addresses_are_understood():
     name = "\0system-report-test-{}".format(os.getpid())
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     sock.bind(name)
@@ -82,7 +121,7 @@ def test_abstract_namespace_addresses_are_understood(tmp_path):
         sock.close()
 
 
-def test_a_dead_socket_does_not_raise(tmp_path):
-    missing = os.path.join(str(tmp_path), "gone.sock")
+def test_a_dead_socket_does_not_raise(sock_dir):
+    missing = socket_path(sock_dir, "gone.sock")
     notifier = sdnotify.Notifier(env={"NOTIFY_SOCKET": missing})
     assert notifier.ready() is False       # logged, not raised
