@@ -127,6 +127,13 @@ Which is just:
 sudo journalctl --unit=system_report.service --lines=100 --follow --output=short-iso
 ```
 
+Where the lines go, if you are not running it under systemd: the local syslog
+socket, `/dev/log` on Linux. On macOS there is no useful syslog sink for a
+foreground process — the handler is happy to accept records, and they are then
+discarded, with nothing in `/var/log/system.log` or the unified log — so set
+`knobs.log_to_console: true` when you run it there by hand, or you will watch a
+silent terminal.
+
 ### Installing by hand
 
 If you would rather not use the script, copy the template and replace the two
@@ -212,7 +219,8 @@ skipped, not fatal.
 ### knobs
 
 `log_to_console` and `log_level_debug`, both `false`. Under systemd everything
-already goes to the journal; these are for foreground debugging.
+already goes to the journal; these are for foreground debugging — and on macOS
+`log_to_console` is the only way to see anything at all (see above).
 
 ## Resilience
 
