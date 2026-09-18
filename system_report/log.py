@@ -2,12 +2,18 @@
 """Logging setup: journal/syslog when available, stdout otherwise."""
 
 import logging
+import os
+import stat
 from logging.handlers import SysLogHandler
-from os import path
 
 from system_report import const
 
-_LOG_SOCKETS = ("/run/systemd/journal/syslog", "/var/run/syslog", "/dev/log")
+# /dev/log is journald's own socket (and a classic syslogd's). Note what is
+# NOT here: /run/systemd/journal/syslog, which is the socket journald uses to
+# forward *out* to rsyslog -- writing there bypasses the journal, so the lines
+# never appear under `journalctl -u`, which is where this project's own docs
+# tell people to look.
+_LOG_SOCKETS = ("/dev/log", "/var/run/syslog")
 
 
 def getLogger():
@@ -15,13 +21,43 @@ def getLogger():
 
 
 def _log_handler_address(files=_LOG_SOCKETS):
-    try:
-        return next(f for f in files if path.exists(f))
-    except StopIteration:
-        return None
+    """First entry that is genuinely a socket.
+
+    Checking the type rather than mere existence matters: SysLogHandler will
+    happily construct against a regular file and only fail later, once per log
+    record, at emit() time.
+    """
+    for candidate in files:
+        try:
+            if stat.S_ISSOCK(os.stat(candidate).st_mode):
+                return candidate
+        except OSError:
+            continue
+    return None
 
 
-def initLogger(testing=False):
+def build_handler(env=None, files=_LOG_SOCKETS):
+    """Pick where log records should go, given the environment we woke up in.
+
+    systemd sets JOURNAL_STREAM when it is already capturing this process's
+    stdout. In that case stdout is the right destination: the journal records
+    each line against the unit, so `journalctl -u` and bin/tail_log.sh show
+    them. Logging to a syslog socket as well would only duplicate every line.
+    """
+    env = os.environ if env is None else env
+    if env.get("JOURNAL_STREAM"):
+        return logging.StreamHandler()
+
+    address = _log_handler_address(files)
+    if address:
+        try:
+            return SysLogHandler(address=address, facility=SysLogHandler.LOG_DAEMON)
+        except (OSError, IOError):
+            return logging.StreamHandler()
+    return logging.StreamHandler()
+
+
+def initLogger(testing=False, env=None):
     logger = getLogger()
     logger.setLevel(logging.INFO)
 
@@ -30,15 +66,7 @@ def initLogger(testing=False):
     )
     formatter = logging.Formatter(fmt)
 
-    address = _log_handler_address()
-    if address:
-        try:
-            handler = SysLogHandler(address=address, facility=SysLogHandler.LOG_DAEMON)
-        except (OSError, IOError):
-            handler = logging.StreamHandler()
-    else:
-        # Under systemd, stdout/stderr already land in the journal.
-        handler = logging.StreamHandler()
+    handler = build_handler(env=env)
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
