@@ -1,0 +1,4 @@
+# paho-mqtt 2.x dropped Python 3.6, so pip resolves 1.6.x there and 2.x on
+# newer interpreters. The code supports both callback APIs.
+paho-mqtt>=1.6.1,<3
+PyYAML>=3.12

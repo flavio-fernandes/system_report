@@ -1,0 +1,32 @@
+# --- secrets and host specific config ---------------------------------------
+# Everything under data/ is ignored by default, and only the *.example files
+# are allowed back in. A new file dropped in data/ (config.yaml, an env file,
+# a password file) therefore cannot be committed by accident.
+data/*
+!data/*.example
+
+# Same idea, anywhere in the tree.
+*.env
+*.secret
+*.pem
+*.key
+mqtt_password*
+
+# --- python / tooling -------------------------------------------------------
+env/
+.venv/
+__pycache__/
+*.py[cod]
+.eggs/
+*.egg-info/
+.tox/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- editors / os -----------------------------------------------------------
+*~
+*.swp
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,4 @@
+# Versions are left open on purpose: pip honors Requires-Python, so Python 3.6
+# gets the last releases that still support it (pytest 7.0.x, flake8 5.0.x).
+pytest
+flake8

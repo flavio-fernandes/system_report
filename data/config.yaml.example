@@ -1,0 +1,124 @@
+---
+# system_report configuration.
+#
+#   cp data/config.yaml.example data/config.yaml && $EDITOR data/config.yaml
+#
+# Every knob below is optional: what you see here are the built-in defaults
+# (system_report/const.py). Delete anything you do not want to override.
+#
+# data/ is gitignored except for *.example files, so your real config.yaml
+# cannot be committed by accident. Keep it that way.
+
+mqtt:
+    # Broker address. Use a hostname or an IP; no scheme, no port here.
+    host: mqtt.example.lan
+    port: 1883                       # 1883 plain, typically 8883 with TLS
+
+    # MQTT client id. Must be unique per broker. null -> system_report_<hostname>
+    client_id: null
+
+    # Seconds between MQTT keepalive pings. Also decides how quickly the broker
+    # declares this client dead and publishes the last-will "offline".
+    keepalive_secs: 60
+
+    # --- authentication -----------------------------------------------------
+    # Leave username null for an anonymous broker.
+    username: null
+    #
+    # The password is looked up in this order, first hit wins:
+    #   1. password_file  - a file containing only the password (chmod 600)
+    #   2. password_env   - name of an environment variable holding it,
+    #                       typically fed by the systemd EnvironmentFile
+    #   3. password       - inline, discouraged: it puts the secret in a file
+    #                       you will eventually copy, diff or paste somewhere
+    password_file: null              # e.g. data/mqtt_password
+    password_env: SYSTEM_REPORT_MQTT_PASSWORD
+    password: null
+
+    # --- TLS ----------------------------------------------------------------
+    tls:
+        enabled: false
+        ca_certs: null               # null -> the system CA bundle
+        certfile: null               # client certificate, if your broker wants one
+        keyfile: null
+        insecure: false              # true disables certificate checks. Testing only!
+
+    # --- publishing behaviour ----------------------------------------------
+    qos: 0                           # 0, 1 or 2, for the metric topics
+    retain: false                    # retain metric values? (status is always retained
+                                     # per topics.status_retain below)
+    clean_session: true
+
+    # Reconnect backoff, in seconds, handled by the mqtt library.
+    reconnect_min_delay_secs: 1
+    reconnect_max_delay_secs: 120
+
+    # Safety net: if the connection has been down this long, throw the client
+    # away and build a new one. 0 disables it.
+    recreate_client_after_secs: 900
+
+    # How long to wait for the broker to acknowledge a qos>0 publish.
+    publish_timeout_secs: 10.0
+
+    # Upper bound on the library's internal queue. Reports produced while the
+    # broker is unreachable are dropped rather than buffered, so an outage
+    # cannot turn this reporter into the memory hog it is meant to catch.
+    max_queued_messages: 100
+
+topics:
+    # "{hostname}" is expanded once, at startup. Set a fixed prefix instead if
+    # you would rather not publish this machine's hostname to the broker.
+    prefix: "/{hostname}"
+
+    # Connection status. "online" is published on connect; "offline" is set as
+    # the MQTT last will, so the broker sends it even if this host vanishes.
+    status: "{prefix}/oper_state/status"
+    payload_online: online
+    payload_offline: offline
+    status_retain: true
+
+    # One JSON document per report, handy for tooling.
+    json: "{prefix}/oper_state/json"
+
+report:
+    interval_secs: 600               # 10 minutes
+    report_on_start: true            # false -> first report one interval after start
+    publish_plain: true              # one plain number per topic
+    publish_json: true               # the JSON snapshot above
+
+metrics:
+    # Linux uptime in whole minutes, from /proc/uptime.
+    uptime_minutes:
+        enabled: true
+        topic: "{prefix}/oper_uptime_minutes"
+
+    # Values from /proc/meminfo, in kB. "{name}" expands to the topic leaf name
+    # of each field, e.g. MemAvailable -> mem_available_kb (the full mapping is
+    # in system_report/const.py; unmapped fields fall back to snake_case).
+    meminfo:
+        enabled: true
+        topic: "{prefix}/oper_state/{name}"
+        # Trim this list to the buckets you care about. The default set answers
+        # both "how much headroom is left" (MemAvailable) and "which bucket is
+        # eating it" (the rest).
+        fields:
+            - MemTotal
+            - MemFree
+            - MemAvailable
+            - Buffers
+            - Cached
+            - Shmem
+            - Slab
+            - SReclaimable
+            - SUnreclaim
+            - KernelStack
+            - PageTables
+            - VmallocUsed
+            - SwapTotal
+            - SwapFree
+
+knobs:
+    # Normally you leave these alone: under systemd everything already goes to
+    # the journal. They are here for foreground debugging.
+    log_to_console: false
+    log_level_debug: false

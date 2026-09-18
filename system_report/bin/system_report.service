@@ -1,0 +1,45 @@
+[Unit]
+Description=Periodic system state (memory/uptime) reporter over MQTT
+Documentation=https://github.com/flavio-fernandes/system_report
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Type=notify: the process tells systemd when it is ready and pets WatchdogSec.
+Type=notify
+NotifyAccess=main
+User=@USER@
+WorkingDirectory=@TOP_DIR@
+
+# Optional: secrets live here, read by systemd (as root) before privileges are
+# dropped, so the file can stay chmod 600 and owned by root. The leading '-'
+# means "do not fail if it does not exist".
+EnvironmentFile=-@TOP_DIR@/data/system_report.env
+
+ExecStart=@TOP_DIR@/system_report/bin/start_system_report.sh @TOP_DIR@/data/config.yaml
+
+Restart=always
+RestartSec=30
+TimeoutStopSec=20
+
+# If the main loop stops petting the watchdog for this long, systemd kills and
+# restarts the service. A broker outage does NOT stop the petting: being unable
+# to reach the broker is an expected state, not a reason to restart.
+WatchdogSec=180
+
+# --- sandboxing -------------------------------------------------------------
+# The service only reads /proc and talks to the broker, so it can afford to be
+# locked down. If you relocate the checkout outside /home, revisit ProtectHome.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
