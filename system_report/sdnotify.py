@@ -37,6 +37,17 @@ class Notifier(object):
         return bool(self._address)
 
     @property
+    def address(self):
+        """The resolved socket address, or None.
+
+        systemd may hand us an abstract-namespace address, which it spells
+        with a leading '@' and the kernel spells with a leading NUL. That
+        translation is pure string work, so exposing the result keeps it
+        testable on platforms that have no abstract namespace at all.
+        """
+        return self._address
+
+    @property
     def watchdog_interval_secs(self):
         """How often to pet the watchdog: half the systemd deadline."""
         if self._watchdog_usec <= 0:

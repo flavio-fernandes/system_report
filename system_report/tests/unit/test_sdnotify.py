@@ -107,6 +107,17 @@ def test_a_garbled_watchdog_value_is_ignored(listener):
     assert sdnotify.Notifier(env=env).watchdog_interval_secs is None
 
 
+def test_an_at_prefixed_address_is_translated_to_the_abstract_namespace():
+    # systemd spells an abstract-namespace address with a leading '@'; the
+    # kernel spells it with a leading NUL. That translation is pure string
+    # work, so it is tested everywhere -- including on platforms with no
+    # abstract namespace, where the round-trip test below cannot run and this
+    # line would otherwise go uncovered.
+    assert sdnotify.Notifier(env={"NOTIFY_SOCKET": "@sysrep"}).address == "\0sysrep"
+    assert sdnotify.Notifier(env={"NOTIFY_SOCKET": "/run/x.sock"}).address == "/run/x.sock"
+    assert sdnotify.Notifier(env={}).address is None
+
+
 @LINUX_ONLY
 def test_abstract_namespace_addresses_are_understood():
     name = "\0system-report-test-{}".format(os.getpid())
