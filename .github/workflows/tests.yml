@@ -74,7 +74,13 @@ jobs:
   prerelease-python:
     # Early warning for the next Python, before it is anyone's problem. It is
     # allowed to fail: a beta breaking a dependency should not turn the repo
-    # red.
+    # red, and neither should there being no pre-release to test yet.
+    #
+    # Pin the next version explicitly rather than reusing "3.x". With "3.x"
+    # setup-python always finds a stable match, so allow-prereleases never
+    # engages and this job silently collapses into a duplicate of the "3.x"
+    # matrix entry above -- green, informative-looking, and testing nothing
+    # new. Bump this number the October the pinned version ships.
     name: Python pre-release (informational)
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -84,7 +90,7 @@ jobs:
       - uses: actions/setup-python@v5
         id: setup
         with:
-          python-version: "3.x"
+          python-version: "3.15"
           allow-prereleases: true
 
       - name: install and test
