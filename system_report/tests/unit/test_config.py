@@ -74,23 +74,23 @@ def test_bad_config_fails_fast_with_the_key_named(make_cfg, overrides):
 
 
 def test_topics_expand_hostname_and_prefix(make_cfg):
-    cfg = make_cfg({}, hostname="fauxmo")
-    assert cfg.prefix == "/fauxmo"
-    assert cfg.status_topic == "/fauxmo/oper_state/status"
-    assert cfg.json_topic == "/fauxmo/oper_state/json"
-    assert cfg.uptime_topic == "/fauxmo/oper_uptime_minutes"
-    assert cfg.meminfo_topic("MemAvailable") == "/fauxmo/oper_state/mem_available_kb"
-    assert cfg.meminfo_topic("SUnreclaim") == "/fauxmo/oper_state/sunreclaim_kb"
+    cfg = make_cfg({}, hostname="myhost")
+    assert cfg.prefix == "/myhost"
+    assert cfg.status_topic == "/myhost/oper_state/status"
+    assert cfg.json_topic == "/myhost/oper_state/json"
+    assert cfg.uptime_topic == "/myhost/oper_uptime_minutes"
+    assert cfg.meminfo_topic("MemAvailable") == "/myhost/oper_state/mem_available_kb"
+    assert cfg.meminfo_topic("SUnreclaim") == "/myhost/oper_state/sunreclaim_kb"
 
 
 def test_prefix_can_hide_the_hostname(make_cfg):
-    cfg = make_cfg({"topics": {"prefix": "/sensors/box1/"}}, hostname="fauxmo")
+    cfg = make_cfg({"topics": {"prefix": "/sensors/box1/"}}, hostname="myhost")
     assert cfg.prefix == "/sensors/box1"          # trailing slash normalized away
     assert cfg.status_topic == "/sensors/box1/oper_state/status"
 
 
 def test_client_id_defaults_to_app_and_hostname(make_cfg):
-    assert make_cfg({}, hostname="fauxmo").client_id == "system_report_fauxmo"
+    assert make_cfg({}, hostname="myhost").client_id == "system_report_myhost"
     assert make_cfg({"mqtt": {"client_id": "box1"}}).client_id == "box1"
 
 
