@@ -1,4 +1,6 @@
 import json
+import re
+from datetime import timedelta
 
 import pytest
 
@@ -111,6 +113,17 @@ def test_json_dict_is_flat_and_serializable(proc_reader):
     assert payload["ts"].endswith("Z")
     assert "errors" not in payload
     assert json.loads(json.dumps(payload))["slab_kb"] == 61204
+
+
+def test_timestamp_is_timezone_aware_utc_and_keeps_its_wire_format(proc_reader):
+    # datetime.utcnow() returns a naive value and is deprecated from 3.12 on,
+    # heading for removal; timezone.utc works on 3.6 through 3.14 alike. The
+    # published string must not change shape either way -- subscribers parse it.
+    snap = collectors.collect(fields=["MemAvailable"], reader=proc_reader())
+    assert snap.ts.tzinfo is not None
+    assert snap.ts.utcoffset() == timedelta(0)
+    assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$",
+                    collectors.to_json_dict(snap)["ts"])
 
 
 def test_json_dict_carries_errors_and_can_omit_the_hostname(proc_reader):
