@@ -12,7 +12,7 @@ collected into ``Snapshot.errors`` and the rest of the report still goes out.
 import collections
 import re
 import socket
-from datetime import datetime
+from datetime import datetime, timezone
 
 from system_report import const
 
@@ -119,7 +119,7 @@ def collect(fields=None, reader=read_text, want_uptime=True, want_meminfo=True,
             errors.append("{}: {}".format(const.PROC_MEMINFO, e))
 
     return Snapshot(
-        ts=now or datetime.utcnow(),
+        ts=now or datetime.now(timezone.utc),
         hostname=hostname or socket.gethostname(),
         uptime_s=uptime_s,
         uptime_minutes=uptime_minutes,
