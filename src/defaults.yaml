@@ -1,0 +1,46 @@
+mqtt:
+  host: localhost
+  port: 1883
+  client_id: null
+  keepalive_secs: 60
+  username: null
+  password: null
+  password_file: null
+  password_env: SYSTEM_REPORT_MQTT_PASSWORD
+  qos: 0
+  retain: false
+  clean_session: true
+  reconnect_min_delay_secs: 1
+  reconnect_max_delay_secs: 120
+  recreate_client_after_secs: 900
+  publish_timeout_secs: 10.0
+  max_queued_messages: 100
+  tls:
+    enabled: false
+    ca_certs: null
+    certfile: null
+    keyfile: null
+    insecure: false
+topics:
+  prefix: /{hostname}
+  status: '{prefix}/oper_state/status'
+  json: '{prefix}/oper_state/json'
+  payload_online: online
+  payload_offline: offline
+  status_retain: true
+report:
+  interval_secs: 600
+  report_on_start: true
+  publish_plain: true
+  publish_json: true
+metrics:
+  uptime_minutes:
+    enabled: true
+    topic: '{prefix}/oper_uptime_minutes'
+  meminfo:
+    enabled: true
+    topic: '{prefix}/oper_state/{name}'
+    fields: [MemTotal, MemFree, MemAvailable, Buffers, Cached, Shmem, Slab, SReclaimable, SUnreclaim, KernelStack, PageTables, VmallocUsed, SwapTotal, SwapFree]
+knobs:
+  log_to_console: false
+  log_level_debug: false
