@@ -7,6 +7,9 @@ edition = "2024"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 hostname = "0.4"
+chrono = "0.4"
+serde_json = { version = "1", features = ["preserve_order"] }
+log = { version = "0.4", features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"
