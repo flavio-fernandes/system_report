@@ -16,7 +16,8 @@ WorkingDirectory=@TOP_DIR@
 # means "do not fail if it does not exist".
 EnvironmentFile=-@TOP_DIR@/data/system_report.env
 
-ExecStart=@TOP_DIR@/system_report/bin/start_system_report.sh @TOP_DIR@/data/config.yaml
+# Build with cargo build --release --locked before installing this unit.
+ExecStart=@TOP_DIR@/target/release/system_report @TOP_DIR@/data/config.yaml
 
 Restart=always
 RestartSec=30

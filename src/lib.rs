@@ -4,5 +4,6 @@ pub mod config;
 pub mod consts;
 pub mod log;
 pub mod mqttclient;
+pub mod reporter;
 #[cfg(unix)]
 pub mod sdnotify;
