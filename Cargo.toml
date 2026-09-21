@@ -10,6 +10,9 @@ hostname = "0.4"
 chrono = "0.4"
 serde_json = { version = "1", features = ["preserve_order"] }
 log = { version = "0.4", features = ["std"] }
+rumqttc = { version = "0.25", default-features = false, features = ["use-native-tls"] }
+native-tls = "0.2"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 
 [target.'cfg(unix)'.dependencies]
 sd-notify = "0.5.0"
