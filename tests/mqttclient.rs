@@ -299,7 +299,14 @@ fn full_qos_queue_does_not_block_qos_zero() {
         publication(&mut s, "/first", "1", 1, false, false);
         publication(&mut s, "/second", "2", 1, false, false);
         publication(&mut s, "/live", "3", 0, false, false);
-        // The full queue also prevents the graceful offline publication.
+        // A full queue is temporary: a clean-session reconnect must free it.
+        drop(s);
+        let mut s = accept(&l);
+        handshake(&mut s);
+        publication(&mut s, STATUS, "online", 1, true, true);
+        publication(&mut s, "/recovered", "1", 1, false, true);
+        publication(&mut s, "/recovered", "2", 1, false, true);
+        publication(&mut s, STATUS, "offline", 1, true, true);
         assert_eq!(packet(&mut s).0, 0xe0);
     });
     p.start().unwrap();
@@ -310,6 +317,14 @@ fn full_qos_queue_does_not_block_qos_zero() {
     assert!(!p.publish("/rejected", 4, Some(QoS::AtLeastOnce), None));
     assert!(now.elapsed() < Duration::from_millis(180));
     assert!(p.publish("/live", 3, None, None));
+    wait(|| !p.connected());
+    wait(|| p.connected());
+    // Barrier: the broker has acknowledged the online announcement before this.
+    // Allow the worker to consume that acknowledgement before testing capacity.
+    thread::sleep(Duration::from_millis(50));
+    for value in 1..=2 {
+        assert!(p.publish("/recovered", value, Some(QoS::AtLeastOnce), None));
+    }
     p.stop();
     server.join().unwrap();
 }
