@@ -251,7 +251,7 @@ async fn run(
     mut rx: channel::Receiver<Message>,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let (client, mut events) = AsyncClient::new(options, 16);
+    let (mut client, mut events) = AsyncClient::new(options.clone(), 16);
     let (min_delay, max_delay, capacity) = limits;
     let mut delay = min_delay;
     let mut queued: VecDeque<Option<Reply>> = VecDeque::new();
@@ -295,6 +295,13 @@ async fn run(
                 Ok(Event::Incoming(Packet::PubComp(ack))) => finish(&mut pending, ack.pkid),
                 Err(_) => {
                     { let mut s = state.lock().unwrap(); if s.connected { s.connected = false; s.since = clock(); } }
+                    // Fail every outstanding caller promptly and release admission slots.
+                    for reply in queued.drain(..).chain(pending.drain().map(|(_, reply)| reply)).flatten() {
+                        let _ = reply.send(false);
+                    }
+                    // Discard rumqttc's buffered/retransmitted requests too: otherwise
+                    // their outgoing events could consume a new publication's waiter.
+                    (client, events) = AsyncClient::new(options.clone(), 16);
                     log::warn!("mqtt connection unavailable; retrying");
                     tokio::select! { _ = &mut stop => break, _ = tokio::time::sleep(delay) => {} }
                     delay = delay.saturating_mul(2).min(max_delay);

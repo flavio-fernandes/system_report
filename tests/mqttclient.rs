@@ -319,12 +319,38 @@ fn full_qos_queue_does_not_block_qos_zero() {
     assert!(p.publish("/live", 3, None, None));
     wait(|| !p.connected());
     wait(|| p.connected());
-    // Barrier: the broker has acknowledged the online announcement before this.
-    // Allow the worker to consume that acknowledgement before testing capacity.
-    thread::sleep(Duration::from_millis(50));
     for value in 1..=2 {
         assert!(p.publish("/recovered", value, Some(QoS::AtLeastOnce), None));
     }
+    p.stop();
+    server.join().unwrap();
+}
+
+#[test]
+fn connection_loss_fails_waiter_before_publish_timeout() {
+    let l = listener();
+    let config = Config::from_yaml(
+        &format!(
+            "mqtt:\n  host: 127.0.0.1\n  port: {}\n  qos: 1\n  publish_timeout_secs: 10\n",
+            l.local_addr().unwrap().port()
+        ),
+        "testhost",
+        &HashMap::new(),
+    )
+    .unwrap();
+    let mut p = Publisher::new(&config).unwrap();
+    let server = thread::spawn(move || {
+        let mut s = accept(&l);
+        handshake(&mut s);
+        publication(&mut s, STATUS, "online", 1, true, true);
+        publication(&mut s, "/unacked", "1", 1, false, false);
+        // Drop the socket while publish() is still waiting for PubAck.
+    });
+    p.start().unwrap();
+    wait(|| p.connected());
+    let now = Instant::now();
+    assert!(!p.publish("/unacked", 1, None, None));
+    assert!(now.elapsed() < Duration::from_secs(2));
     p.stop();
     server.join().unwrap();
 }
