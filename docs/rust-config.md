@@ -1,16 +1,16 @@
 # Rust configuration slice
 
-This is a library scaffold, not yet a replacement for the running Python service.
-Python and `data/config.yaml.example` are unchanged. Build/test with `cargo build
---locked` and `cargo test --locked` (Rust 2024 edition). Cargo.lock is committed.
+The Rust configuration library is used by the service executable. Build/test with
+`cargo build --locked` and `cargo test --locked` (Rust 2024 edition).
+Cargo.lock is committed.
 
-## API for subsequent port slices
+## API
 
 - `config::load(path: Option<&Path>, env: Option<&HashMap<String, String>>,
   hostname: Option<&str>) -> Result<Config, ConfigError>` reads a YAML file.
   The default is `data/config.yaml` in the **build checkout**, matching the old
   checkout-relative default. An installed binary must pass its config path
-  explicitly; deployment/CLI policy belongs to the later runtime slice.
+  explicitly; the checkout wrapper and systemd unit supply one.
 - `Config::from_yaml(yaml, hostname, env)` has no ambient password lookup. Passing
   an empty environment disables ambient MQTT-password lookup. HOME expansion is
   separate: `~/` uses the supplied HOME first, then process HOME; inject HOME too
@@ -25,9 +25,9 @@ Python and `data/config.yaml.example` are unchanged. Build/test with `cargo buil
 - `redacted()` returns a cloned config with inline passwords masked. Use it for
   diagnostics, never raw indexed values or `password`. Config deliberately does
   not implement Debug or Serialize. Parse/type errors do not echo YAML values.
-- `log_warnings(|message| ...)` adapts to the later logging implementation.
+- `log_warnings(|message| ...)` feeds the logging implementation.
 - `consts` contains every Python constant; `consts::meminfo_topic_name` is the
-  shared leaf-name helper for the future collectors (no metric collection here).
+  shared leaf-name helper for the collectors.
 
 ## Compatibility and stricter checks
 
@@ -48,10 +48,9 @@ environment maps do not fall back to the process environment (the Python
 `env or os.environ` implementation did).
 
 `serde_yaml` 0.9 is deprecated upstream but retained here per the port's decided
-dependency mapping. MQTT (`rumqttc`) and readiness (`sd-notify`) dependencies are
-left for the slices that use them, rather than adding unused packages now.
+dependency mapping. MQTT uses `rumqttc`; readiness uses `sd-notify`.
 
 `tests/fixtures/python_constants.json` is a frozen parity oracle generated on the
 playground from the original `system_report/const.py` using `runpy.run_path`,
 filtering uppercase names and serializing via `json.dump`. Rust tests require no
-Python runtime. Keep this oracle when the final slice removes Python.
+Python runtime. This oracle is retained after removal of the Python sources.

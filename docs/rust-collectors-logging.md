@@ -1,7 +1,7 @@
 # Rust collectors and logging
 
-This slice adds library modules only; the Python entry point remains until the
-scheduler/CLI port. Existing config and constants parity tests remain intact.
+These library modules are used by the Rust service executable. Existing config
+and constants parity tests remain intact.
 
 ## Collectors
 
