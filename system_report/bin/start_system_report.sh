@@ -1,29 +1,29 @@
 #!/bin/bash
-# Start system_report from the checkout's virtualenv.
-#
-#   ./system_report/bin/start_system_report.sh [path/to/config.yaml] [--once|--dry-run]
-#
-# With no config argument, data/config.yaml next to this checkout is used.
-#
-# NOTE the exec below: systemd's Type=notify expects the READY=1 datagram from
-# the unit's main process, so python has to *replace* this shell, not run as
-# its child.
-
-set -o errexit
-set -o nounset
-
-cd "$(dirname "$0")"
-BIN_DIR="${PWD}"
-PROG_DIR="${BIN_DIR%/*}"
-TOP_DIR="${PROG_DIR%/*}"
-
-if [ ! -e "${TOP_DIR}/env/bin/activate" ]; then
-    echo "no virtualenv found: run ${BIN_DIR}/create-env.sh first" >&2
+# Run the release executable; default to this checkout's config, not its build path.
+# Usage: start_system_report.sh [CONFIG] [--once|--dry-run|--print-config]
+set -euo pipefail
+TOP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+BINARY="${TOP_DIR}/target/release/system_report"
+if [ ! -x "${BINARY}" ]; then
+    echo "no release binary found: run cargo build --release --locked in ${TOP_DIR}" >&2
     exit 1
 fi
-
-source "${TOP_DIR}/env/bin/activate"
-export PYTHONPATH="${TOP_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
-
-cd "${TOP_DIR}"
-exec python -m system_report.main "$@"
+# Preserve caller cwd for explicit relative config and password-file paths.
+# The CLI accepts the positional config before or after flags.
+has_config=no
+positional=no
+for arg in "$@"; do
+    if [ "${positional}" = yes ]; then
+        has_config=yes
+        break
+    fi
+    case "${arg}" in
+        --) positional=yes ;;
+        -*) ;;
+        *) has_config=yes ;;
+    esac
+done
+if [ "${has_config}" = no ]; then
+    set -- "${TOP_DIR}/data/config.yaml" "$@"
+fi
+exec "${BINARY}" "$@"

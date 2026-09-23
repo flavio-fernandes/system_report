@@ -4,7 +4,7 @@
 #   sudo ./system_report/bin/install-service.sh [--user someuser] [--no-start]
 #
 # The unit runs as the invoking (non-root) user by default, from wherever this
-# checkout lives. Nothing is written anywhere else.
+# checkout lives. Builds must be performed beforehand as the ordinary user.
 
 set -o errexit
 set -o nounset
@@ -21,9 +21,17 @@ DO_START="yes"
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --user) RUN_AS="$2"; shift 2 ;;
+        --user) [ $# -ge 2 ] || { echo "--user requires a value" >&2; exit 2; }; RUN_AS="$2"; shift 2 ;;
         --no-start) DO_START="no"; shift ;;
-        -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+        -h|--help)
+            cat <<'USAGE'
+Usage: sudo ./system_report/bin/install-service.sh [--user USER] [--no-start]
+Install the prebuilt release executable as a systemd service.
+--user USER  Run as this unprivileged user (default: invoking sudo user).
+--no-start   Install and enable the unit without starting it.
+USAGE
+            exit 0 ;;
+
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -40,8 +48,11 @@ if ! id -u "${RUN_AS}" >/dev/null 2>&1; then
     echo "user does not exist: ${RUN_AS}" >&2
     exit 1
 fi
-if [ ! -e "${TOP_DIR}/env/bin/activate" ]; then
-    echo "no virtualenv in ${TOP_DIR}/env: run create-env.sh as ${RUN_AS} first" >&2
+case "${TOP_DIR}" in
+    *[!a-zA-Z0-9/_.-]*) echo "unsupported checkout path: use only letters, digits, /, _, ., -" >&2; exit 1 ;;
+esac
+if [ ! -x "${TOP_DIR}/target/release/system_report" ]; then
+    echo "no release binary found: run cargo build --release --locked as ${RUN_AS} first" >&2
     exit 1
 fi
 if [ ! -e "${TOP_DIR}/data/config.yaml" ]; then
@@ -65,9 +76,17 @@ fi
 systemctl daemon-reload
 systemctl enable "${UNIT_NAME}"
 if [ "${DO_START}" = "yes" ]; then
-    systemctl restart "${UNIT_NAME}"
+    if ! systemctl restart "${UNIT_NAME}"; then
+        echo "failed to start ${UNIT_NAME}; recent journal follows" >&2
+        journalctl --no-pager --unit="${UNIT_NAME}" --lines=30 >&2 || true
+        exit 1
+    fi
     sleep 2
-    systemctl --no-pager --full status "${UNIT_NAME}" || true
+    if ! systemctl --no-pager --full status "${UNIT_NAME}"; then
+        echo "${UNIT_NAME} did not remain active after startup; recent journal follows" >&2
+        journalctl --no-pager --unit="${UNIT_NAME}" --lines=30 >&2 || true
+        exit 1
+    fi
 else
     echo "not started (--no-start). Start it with: systemctl start ${UNIT_NAME}"
 fi
