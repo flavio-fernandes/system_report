@@ -362,6 +362,7 @@ fn persistent_qos_two_reconnect(released: bool, session_present: bool) {
         "  clean_session: false\n",
     ))
     .unwrap();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let server = thread::spawn(move || {
         let mut s = accept(&l);
         handshake(&mut s);
@@ -409,6 +410,7 @@ fn persistent_qos_two_reconnect(released: bool, session_present: bool) {
         } else {
             publication(&mut s, STATUS, "online", 1, true, true);
         }
+        ready_tx.send(()).unwrap();
         let (header, body) = packet(&mut s);
         assert_eq!(header, 0x34);
         let mut offset = 0;
@@ -434,6 +436,8 @@ fn persistent_qos_two_reconnect(released: bool, session_present: bool) {
     assert!(!p.publish("/old", "old", Some(QoS::ExactlyOnce), None));
     wait(|| !p.connected());
     wait(|| p.connected());
+    // Synchronize the test peer: a new publication may legally overtake PUBREL.
+    ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(p.publish("/new", "new", Some(QoS::ExactlyOnce), None));
     p.stop();
     server.join().unwrap();
