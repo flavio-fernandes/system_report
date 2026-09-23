@@ -1,8 +1,30 @@
 # Upgrade an existing Python installation to Rust
 
-> **DRAFT — not yet verified end to end on a live Linux host.** Keep this banner
-> until a maintainer records the host/distribution, Rust version, commit, date,
-> broker observations, and rollback result from actually running this recipe.
+> **Validation scope:** The forward upgrade in steps 1–6 was exercised on a
+> real Ubuntu 18.04.6 LTS host on 2026-09-23, with the corrections below arising
+> from that run. **Rollback in step 7 has not been exercised; treat it as
+> reviewed but untested.** Retain the Python environment and backups until the
+> rollback window closes.
+
+The [live-run report](https://github.com/flavio-fernandes/system_report/pull/1#issuecomment-5787041561)
+records the following evidence. This is one validated installation, not a
+compatibility guarantee for every host on this distribution.
+
+| Item | Reported result |
+|---|---|
+| Platform | Ubuntu 18.04.6 LTS, kernel 4.15, x86_64 |
+| Git / OpenSSL / systemd | 2.17 / 1.1.1 / 237 |
+| Toolchain | rustup Rust 1.88.0; `cargo +1.88.0 build --release --locked` |
+| Deployed commit / date | `60fa447` / 2026-09-23 |
+| Service and broker | Active; `NRestarts=0`; `reports=1 completed=3/3 connected=true`; metrics resumed on the broker |
+| Configuration | Existing `data/config.yaml` carried over unmodified; no boolean conversion needed on this installation |
+| Broker address | Numeric IP address, confirmed by the operator; hostname/DNS sandbox path not exercised |
+| Rollback | Not exercised |
+
+These documentation corrections have been reviewed separately; they were not
+part of the deployed `60fa447` revision. The operator confirmed that
+`mqtt.host` was a numeric IP address, so the hostname/DNS sandbox check in step 6
+remains unverified.
 
 These steps assume the existing checkout, `env/` virtualenv, `data/config.yaml`,
 and `system_report.service` layout. Run them in one Bash session as the ordinary
@@ -42,6 +64,8 @@ against this checkout. Record whether the service was enabled/running. Confirm
 root-only. If a unit override changes its config, executable, or environment,
 account for that override before proceeding. Back up referenced password/TLS
 files outside `data/` with `sudo cp -a` into this protected backup as well.
+`$BACKUP` is root-owned and mode 0700: every later read requires sudo, for example
+`sudo cat "$BACKUP/session-vars.sh"` or `sudo wc -l "$BACKUP/journal-before.txt"`.
 
 ## 2. Install the build prerequisites without replacing Python
 
@@ -67,17 +91,27 @@ The old Python process and its virtualenv are still untouched.
 
 ## 3. Stop Python and select the reviewed Rust revision
 
-While PR #1 is open, fetch its head explicitly. After it merges, fetch and select
-the reviewed commit from `origin/main` instead of the PR ref.
+The normal, post-merge path selects the reviewed Rust revision on `origin/main`.
+If testing an open port PR, replace the fetch/revision lines with the labelled
+exception before continuing. Git older than 2.23 is supported by using
+`git checkout --detach` for both deployment and rollback.
 
 ```bash
 sudo systemctl stop system_report.service
 systemctl is-active system_report.service   # expected: inactive (nonzero exit)
 cd "$CHECKOUT"
-git fetch origin pull/1/head
-RUST_REV="$(git rev-parse FETCH_HEAD)"
+# Normal case after the Rust port has merged:
+git fetch origin
+RUST_REV="$(git rev-parse origin/main)"
+
+# Exception: testing an open, unmerged port PR. Replace the two lines above
+# with these, setting PR_NUMBER to the PR being reviewed:
+# PR_NUMBER=1
+# git fetch origin "pull/${PR_NUMBER}/head"
+# RUST_REV="$(git rev-parse FETCH_HEAD)"
+
 git show --stat --oneline "$RUST_REV"
-git switch --detach "$RUST_REV"
+git checkout --detach "$RUST_REV"
 test -f Cargo.toml
 test -x env/bin/python
 ```
@@ -89,8 +123,11 @@ If Git refuses the switch, stop and preserve the reported files; do not force it
 ## 4. Carry forward configuration and secret access
 
 Keep the existing `data/config.yaml`; do **not** replace it with the example.
-Compare it locally with `data/config.yaml.example`. Change YAML booleans such as
-`yes`/`no` to `true`/`false`. YAML anchors and `<<` merges are supported.
+Compare it locally with `data/config.yaml.example`. **If present**, change YAML
+booleans such as `yes`/`no` to `true`/`false`; this is a conditional check, not a
+required edit on every installation. The recorded live run needed no config
+changes. YAML anchors and `<<` merges are supported. No configuration keys were
+renamed.
 Password precedence remains file, environment, inline. Prefer absolute paths
 for password and TLS files.
 
@@ -166,7 +203,9 @@ cd "$CHECKOUT"
 sudo ./system_report/bin/install-service.sh --user "$SERVICE_USER"
 systemctl is-active system_report.service
 systemctl show system_report.service -p MainPID -p ExecStart -p User -p NRestarts
-sudo journalctl -u system_report.service -n 100 --no-pager
+sudo journalctl -u system_report.service \
+  --since "$(systemctl show system_report.service -p ActiveEnterTimestamp --value)" \
+  --no-pager
 ```
 
 **Verify:** unit is active, `ExecStart` names `target/release/system_report`, and
@@ -185,19 +224,23 @@ observe another reporting interval. Record results with the deployed revision.
 ## 7. Roll back if any verification fails
 
 Before cleanup, the original virtualenv and Git revision remain available.
-In a new shell, restore the variables by inspecting the protected
-`$BACKUP/session-vars.sh` (or set them to the recorded values). Then:
+**This rollback has been reviewed but not exercised on the reported host.**
+In a new shell, first set `BACKUP` to the root-only backup directory recorded in
+step 1, then inspect the saved values with `sudo cat "$BACKUP/session-vars.sh"`.
+Restore `CHECKOUT`, `PYTHON_REV`, and `SERVICE_USER` from those values. Then:
 
 ```bash
 sudo systemctl stop system_report.service
 cd "$CHECKOUT"
-git switch --detach "$PYTHON_REV"
+git checkout --detach "$PYTHON_REV"
 sudo cp -a "$BACKUP/data/." "$CHECKOUT/data/"
 sudo cp -a "$BACKUP/system_report.service" /etc/systemd/system/system_report.service
 sudo systemctl daemon-reload
 sudo systemctl restart system_report.service
 systemctl is-active system_report.service
-sudo journalctl -u system_report.service -n 100 --no-pager
+sudo journalctl -u system_report.service \
+  --since "$(systemctl show system_report.service -p ActiveEnterTimestamp --value)" \
+  --no-pager
 ```
 
 Restore any external secrets you changed from their protected backups too.
@@ -224,5 +267,5 @@ pwd                          # verify this is the intended checkout
 **Verify:** the Rust service and broker traffic remain healthy. Do not run
 `cargo clean` on this deployed checkout: the unit uses `target/release/system_report`.
 Retire secret-bearing backups separately according to the host's backup policy.
-Remove the draft banner only after recording an actual end-to-end host test,
-including rollback, in the PR or this document.
+Update the validation record after any further host test. Remove the untested
+rollback warning only after actually exercising step 7 and recording its result.

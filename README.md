@@ -80,7 +80,10 @@ TLS uses the system OpenSSL libraries and CA trust store. Build on the target
 Linux distribution (or a compatible one); a binary built against newer glibc or
 OpenSSL is not guaranteed to run on an old distribution. Rust 1.88 is the
 minimum supported Rust version (MSRV), checked on Linux in CI with the locked
-dependencies. This does not imply support for every older Linux distribution.
+dependencies. A [reported live upgrade](https://github.com/flavio-fernandes/system_report/pull/1#issuecomment-5787041561)
+built and ran commit `60fa447` on Ubuntu 18.04.6 LTS with Rust 1.88.0 and system
+OpenSSL 1.1.1, without special handling. This is evidence for that installation,
+not a guarantee for every older Linux distribution.
 Check `rustc --version`; distribution packages may be older. To install the
 minimum toolchain as your ordinary user:
 
@@ -151,9 +154,10 @@ user and run `sudo systemctl restart system_report.service`.
 
 Migrating from Python: follow [the upgrade recipe](upgrade-from-python-recipe.md)
 for backup, configuration checks, service and broker verification, and rollback.
-Keep the Python virtualenv until those checks pass. The recipe remains a draft
-until exercised on a real host. YAML booleans must be `true` / `false` rather
-than YAML 1.1 `yes` / `no`.
+The forward upgrade was exercised on a real host; rollback remains reviewed but
+untested. Keep the Python virtualenv and backups through the rollback window.
+Check for YAML 1.1 `yes` / `no` booleans and replace them with `true` / `false`
+only if present; the recorded installation needed no configuration changes.
 
 Watch the journal:
 
