@@ -18,12 +18,15 @@ Cargo.lock is committed.
   environment and hostname.
 - `cfg["mqtt"]["port"].as_u64()` and similar read-only `serde_yaml::Value` access
   preserve the Python dictionary interface, recursive overlays and unknown keys.
+  YAML merge keys (`<<`, including aliases and merge sequences) are expanded
+  before overlaying defaults. Invalid merges fail without echoing values.
   Known keys are validated at construction. No mutable indexing is exposed.
 - Resolved `prefix`, `status_topic`, `json_topic`, `uptime_topic`, `hostname`,
   `password`, `warnings`, and `path` are public. `client_id()`, `meminfo_fields()`,
   `uptime_enabled()`, `meminfo_enabled()` and `meminfo_topic(field)` are helpers.
 - `redacted()` returns a cloned config with inline passwords masked. Use it for
-  diagnostics, never raw indexed values or `password`. Config deliberately does
+  diagnostics, never raw indexed values or `password`. Password fields in retained
+  anchor definitions and other unknown mappings are masked recursively too. Config deliberately does
   not implement Debug or Serialize. Parse/type errors do not echo YAML values.
 - `log_warnings(|message| ...)` feeds the logging implementation.
 - `consts` contains every Python constant; `consts::meminfo_topic_name` is the

@@ -354,3 +354,244 @@ fn connection_loss_fails_waiter_before_publish_timeout() {
     p.stop();
     server.join().unwrap();
 }
+
+fn persistent_qos_two_reconnect(released: bool, session_present: bool) {
+    let l = listener();
+    let mut p = Publisher::new(&cfg(
+        l.local_addr().unwrap().port(),
+        "  clean_session: false\n",
+    ))
+    .unwrap();
+    let server = thread::spawn(move || {
+        let mut s = accept(&l);
+        handshake(&mut s);
+        publication(&mut s, STATUS, "online", 1, true, true);
+        let (header, body) = packet(&mut s);
+        assert_eq!(header, 0x34);
+        let mut offset = 0;
+        assert_eq!(field(&body, &mut offset), b"/old");
+        let id = [body[offset], body[offset + 1]];
+        if released {
+            s.write_all(&[0x50, 2, id[0], id[1]]).unwrap();
+            assert_eq!(packet(&mut s), (0x62, id.to_vec()));
+        }
+        drop(s);
+        let mut s = accept(&l);
+        assert_eq!(packet(&mut s).0, 0x10);
+        s.write_all(&[0x20, 2, u8::from(session_present), 0])
+            .unwrap();
+        if session_present {
+            if !released {
+                let (header, replay) = packet(&mut s);
+                assert_eq!(header & !8, 0x34);
+                assert_eq!(replay, body, "resumed PUBLISH keeps payload and packet ID");
+                s.write_all(&[0x50, 2, id[0], id[1]]).unwrap();
+                // Online may be emitted before the broker's PUBREC is processed.
+                // Consume it below while waiting for the old PUBREL.
+            }
+            let mut online = false;
+            loop {
+                let (header, b) = packet(&mut s);
+                if header == 0x62 {
+                    assert_eq!(b, id);
+                    // Keep the old exchange unfinished while a new one starts.
+                    break;
+                }
+                assert_eq!(header, 0x33);
+                let mut offset = 0;
+                assert_eq!(field(&b, &mut offset), STATUS.as_bytes());
+                s.write_all(&[0x40, 2, b[offset], b[offset + 1]]).unwrap();
+                online = true;
+            }
+            if !online {
+                publication(&mut s, STATUS, "online", 1, true, true);
+            }
+        } else {
+            publication(&mut s, STATUS, "online", 1, true, true);
+        }
+        let (header, body) = packet(&mut s);
+        assert_eq!(header, 0x34);
+        let mut offset = 0;
+        assert_eq!(field(&body, &mut offset), b"/new");
+        let new_id = [body[offset], body[offset + 1]];
+        if session_present {
+            assert_ne!(
+                new_id, id,
+                "must not reuse an unfinished exchange's packet ID"
+            );
+        }
+        s.write_all(&[0x50, 2, new_id[0], new_id[1]]).unwrap();
+        assert_eq!(packet(&mut s), (0x62, new_id.to_vec()));
+        s.write_all(&[0x70, 2, new_id[0], new_id[1]]).unwrap();
+        if session_present {
+            s.write_all(&[0x70, 2, id[0], id[1]]).unwrap();
+        }
+        publication(&mut s, STATUS, "offline", 1, true, true);
+        assert_eq!(packet(&mut s).0, 0xe0);
+    });
+    p.start().unwrap();
+    wait(|| p.connected());
+    assert!(!p.publish("/old", "old", Some(QoS::ExactlyOnce), None));
+    wait(|| !p.connected());
+    wait(|| p.connected());
+    assert!(p.publish("/new", "new", Some(QoS::ExactlyOnce), None));
+    p.stop();
+    server.join().unwrap();
+}
+
+#[test]
+fn persistent_session_replays_unacknowledged_publish() {
+    persistent_qos_two_reconnect(false, true);
+}
+#[test]
+fn persistent_session_resumes_pubrel() {
+    persistent_qos_two_reconnect(true, true);
+}
+#[test]
+fn absent_broker_session_clears_old_waiters() {
+    persistent_qos_two_reconnect(false, false);
+}
+
+#[test]
+fn persistent_session_is_not_discarded_by_outage_recreation() {
+    let clock = Arc::new(AtomicU64::new(0));
+    let c = clock.clone();
+    let l = listener();
+    let port = l.local_addr().unwrap().port();
+    drop(l);
+    let mut p = Publisher::with_clock(
+        &cfg(
+            port,
+            "  clean_session: false\n  recreate_client_after_secs: 1\n",
+        ),
+        Arc::new(move || Duration::from_secs(c.load(Ordering::SeqCst))),
+    )
+    .unwrap();
+    p.start().unwrap();
+    clock.store(1000, Ordering::SeqCst);
+    assert!(!p.maintain().unwrap());
+    p.stop();
+}
+
+#[test]
+fn qos_zero_waits_for_wire_progress_at_underlying_inflight_limit() {
+    let l = listener();
+    let mut p = Publisher::new(&cfg(
+        l.local_addr().unwrap().port(),
+        "  max_queued_messages: 0\n",
+    ))
+    .unwrap();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (delivered_tx, delivered_rx) = std::sync::mpsc::channel();
+    let server = thread::spawn(move || {
+        let mut s = accept(&l);
+        handshake(&mut s);
+        publication(&mut s, STATUS, "online", 1, true, true);
+        let mut ids = Vec::new();
+        for _ in 0..100 {
+            let (header, body) = packet(&mut s);
+            assert_eq!(header, 0x32);
+            let mut offset = 0;
+            assert_eq!(field(&body, &mut offset), b"/unacked");
+            ids.push([body[offset], body[offset + 1]]);
+        }
+        // The caller must time out, rather than report a queued packet as sent.
+        release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        for id in ids {
+            s.write_all(&[0x40, 2, id[0], id[1]]).unwrap();
+        }
+        publication(&mut s, "/live", "value", 0, false, false);
+        delivered_tx.send(()).unwrap();
+        publication(&mut s, "/after", "value", 0, false, false);
+        publication(&mut s, STATUS, "offline", 1, true, true);
+        assert_eq!(packet(&mut s).0, 0xe0);
+    });
+    p.start().unwrap();
+    wait(|| p.connected());
+    for _ in 0..100 {
+        assert!(!p.publish("/unacked", "value", Some(QoS::AtLeastOnce), None));
+    }
+    assert!(!p.publish("/live", "value", None, None));
+    release_tx.send(()).unwrap();
+    delivered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(p.publish("/after", "value", None, None));
+    p.stop();
+    server.join().unwrap();
+}
+
+// Exercise the production Linux/OpenSSL native-tls backend with disposable keys.
+#[cfg(target_os = "linux")]
+#[test]
+fn tls_identity_accepts_separate_and_combined_pkcs8_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("client.key");
+    let cert = dir.path().join("client.crt");
+    let output = std::process::Command::new("openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=loopback-test",
+            "-keyout",
+        ])
+        .arg(&key)
+        .arg("-out")
+        .arg(&cert)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "disposable TLS fixture generation failed"
+    );
+    let config = cfg(
+        1883,
+        &format!(
+            "  tls: {{enabled: true, certfile: '{}', keyfile: '{}'}}\n",
+            cert.display(),
+            key.display()
+        ),
+    );
+    assert!(Publisher::new(&config).is_ok());
+    let c = std::fs::read(&cert).unwrap();
+    let k = std::fs::read(&key).unwrap();
+    let combined = dir.path().join("combined.pem");
+    for bytes in [
+        [c.as_slice(), k.as_slice()].concat(),
+        [k.as_slice(), c.as_slice()].concat(),
+    ] {
+        std::fs::write(&combined, bytes).unwrap();
+        let config = cfg(
+            1883,
+            &format!(
+                "  tls: {{enabled: true, certfile: '{}'}}\n",
+                combined.display()
+            ),
+        );
+        assert!(Publisher::new(&config).is_ok());
+    }
+    let legacy = dir.path().join("legacy.key");
+    let output = std::process::Command::new("openssl")
+        .args(["rsa", "-traditional", "-in"])
+        .arg(&key)
+        .arg("-out")
+        .arg(&legacy)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let config = cfg(
+        1883,
+        &format!(
+            "  tls: {{enabled: true, certfile: '{}', keyfile: '{}'}}\n",
+            cert.display(),
+            legacy.display()
+        ),
+    );
+    let error = Publisher::new(&config).err().unwrap().to_string();
+    assert!(error.contains("PKCS#8"));
+    assert!(!error.contains("BEGIN"));
+}

@@ -1,6 +1,8 @@
 //! Outage-tolerant MQTT 3.1.1 publisher. Network I/O belongs to a private thread.
 use crate::config::Config;
-use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Outgoing, Packet, QoS, Transport};
+use rumqttc::{
+    AsyncClient, Event, LastWill, MqttOptions, Outgoing, Packet, QoS, Request, Transport,
+};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex, mpsc},
@@ -8,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc as channel, oneshot};
+
+mod tls;
 
 type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
 type Reply = mpsc::Sender<bool>;
@@ -101,10 +105,7 @@ impl Publisher {
             }
             if let Some(cert) = tls["certfile"].as_str() {
                 let key = tls["keyfile"].as_str().unwrap_or(cert);
-                builder.identity(native_tls::Identity::from_pkcs8(
-                    &std::fs::read(cert)?,
-                    &std::fs::read(key)?,
-                )?);
+                builder.identity(tls::identity(cert.as_ref(), key.as_ref())?);
             }
             // paho tls_insecure_set disables hostname checks, not CA validation.
             builder.danger_accept_invalid_hostnames(tls["insecure"].as_bool().unwrap());
@@ -206,7 +207,8 @@ impl Publisher {
         rx.recv_timeout(self.timeout).unwrap_or(false)
     }
     pub fn maintain(&mut self) -> std::io::Result<bool> {
-        if self.recreate.is_zero()
+        if !self.options.clean_session()
+            || self.recreate.is_zero()
             || self.connected()
             || self.worker.is_none()
             || self.disconnected_for() < self.recreate
@@ -254,7 +256,7 @@ async fn run(
     let (mut client, mut events) = AsyncClient::new(options.clone(), 16);
     let (min_delay, max_delay, capacity) = limits;
     let mut delay = min_delay;
-    let mut queued: VecDeque<Option<Reply>> = VecDeque::new();
+    let mut queued: VecDeque<(QoS, Option<Reply>)> = VecDeque::new();
     let mut pending: HashMap<u16, Option<Reply>> = HashMap::new();
     loop {
         tokio::select! {
@@ -269,39 +271,54 @@ async fn run(
             }
             Some(m) = rx.recv() => {
                 // Like paho, the outgoing queue limit applies only to QoS 1/2.
-                if !state.lock().unwrap().connected || (m.qos != QoS::AtMostOnce && capacity != 0 && queued.len() + pending.len() >= capacity) {
+                if !state.lock().unwrap().connected || (m.qos != QoS::AtMostOnce && capacity != 0 && queued.iter().filter(|(qos, _)| *qos != QoS::AtMostOnce).count() + pending.len() >= capacity) {
                     let _ = m.reply.send(false); continue;
                 }
                 match client.try_publish(m.topic, m.qos, m.retain, m.payload) {
                     Ok(()) => {
-                        if m.qos == QoS::AtMostOnce { let _ = m.reply.send(true); queued.push_back(None); }
-                        else { queued.push_back(Some(m.reply)); }
+                        queued.push_back((m.qos, Some(m.reply)));
                     }
                     Err(_) => { let _ = m.reply.send(false); }
                 }
             }
             event = events.poll() => match event {
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
+                    // poll() has reconciled pending requests with session_present.
+                    // Rebuild bookkeeping from those requests, not stale outgoing events.
+                    queued.clear();
+                    pending.clear();
+                    for request in &events.pending {
+                        match request {
+                            Request::Publish(p) if p.pkid == 0 => queued.push_back((p.qos, None)),
+                            Request::Publish(p) => { pending.insert(p.pkid, None); }
+                            Request::PubRel(p) => { pending.insert(p.pkid, None); }
+                            _ => {}
+                        }
+                    }
                     { let mut s = state.lock().unwrap(); s.connected = true; s.dropped = 0; s.last_log = None; }
                     delay = min_delay;
-                    if client.try_publish(&online.0, QoS::AtLeastOnce, online.2, online.1.as_bytes()).is_ok() { queued.push_back(None); }
+                    if client.try_publish(&online.0, QoS::AtLeastOnce, online.2, online.1.as_bytes()).is_ok() { queued.push_back((QoS::AtLeastOnce, None)); }
                 }
                 Ok(Event::Outgoing(Outgoing::Publish(id))) => {
                     // Retransmitted QoS packets retain their packet id and waiter.
-                    if id == 0 { queued.pop_front(); }
-                    else if let std::collections::hash_map::Entry::Vacant(entry) = pending.entry(id) { entry.insert(queued.pop_front().flatten()); }
+                    if id == 0 { if let Some((_, Some(reply))) = queued.pop_front() { let _ = reply.send(true); } }
+                    else if let std::collections::hash_map::Entry::Vacant(entry) = pending.entry(id) { entry.insert(queued.pop_front().and_then(|(_, reply)| reply)); }
                 }
                 Ok(Event::Incoming(Packet::PubAck(ack))) => finish(&mut pending, ack.pkid),
                 Ok(Event::Incoming(Packet::PubComp(ack))) => finish(&mut pending, ack.pkid),
                 Err(_) => {
                     { let mut s = state.lock().unwrap(); if s.connected { s.connected = false; s.since = clock(); } }
-                    // Fail every outstanding caller promptly and release admission slots.
-                    for reply in queued.drain(..).chain(pending.drain().map(|(_, reply)| reply)).flatten() {
+                    // Fail callers promptly. Resumed protocol exchanges still occupy slots.
+                    for reply in queued.drain(..).map(|(_, reply)| reply).chain(pending.drain().map(|(_, reply)| reply)).flatten() {
                         let _ = reply.send(false);
                     }
-                    // Discard rumqttc's buffered/retransmitted requests too: otherwise
-                    // their outgoing events could consume a new publication's waiter.
-                    (client, events) = AsyncClient::new(options.clone(), 16);
+                    if options.clean_session() {
+                        (client, events) = AsyncClient::new(options.clone(), 16);
+                    } else {
+                        // rumqttc retains PUBLISH/PUBREL and packet IDs for session resume.
+                        // Buffered notifications describe the failed connection only.
+                        events.state.events.clear();
+                    }
                     log::warn!("mqtt connection unavailable; retrying");
                     tokio::select! { _ = &mut stop => break, _ = tokio::time::sleep(delay) => {} }
                     delay = delay.saturating_mul(2).min(max_delay);

@@ -23,7 +23,15 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --user) [ $# -ge 2 ] || { echo "--user requires a value" >&2; exit 2; }; RUN_AS="$2"; shift 2 ;;
         --no-start) DO_START="no"; shift ;;
-        -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+        -h|--help)
+            cat <<'USAGE'
+Usage: sudo ./system_report/bin/install-service.sh [--user USER] [--no-start]
+Install the prebuilt release executable as a systemd service.
+--user USER  Run as this unprivileged user (default: invoking sudo user).
+--no-start   Install and enable the unit without starting it.
+USAGE
+            exit 0 ;;
+
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -68,9 +76,17 @@ fi
 systemctl daemon-reload
 systemctl enable "${UNIT_NAME}"
 if [ "${DO_START}" = "yes" ]; then
-    systemctl restart "${UNIT_NAME}"
+    if ! systemctl restart "${UNIT_NAME}"; then
+        echo "failed to start ${UNIT_NAME}; recent journal follows" >&2
+        journalctl --no-pager --unit="${UNIT_NAME}" --lines=30 >&2 || true
+        exit 1
+    fi
     sleep 2
-    systemctl --no-pager --full status "${UNIT_NAME}" || true
+    if ! systemctl --no-pager --full status "${UNIT_NAME}"; then
+        echo "${UNIT_NAME} did not remain active after startup; recent journal follows" >&2
+        journalctl --no-pager --unit="${UNIT_NAME}" --lines=30 >&2 || true
+        exit 1
+    fi
 else
     echo "not started (--no-start). Start it with: systemctl start ${UNIT_NAME}"
 fi

@@ -46,6 +46,9 @@ done <<< "${staged}"
 
 # An inline password with an actual value (password: null / "" are fine).
 while IFS= read -r file; do
+    if git show ":${file}" 2>/dev/null | grep -qE -- '^[[:space:]]*-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----[[:space:]]*$'; then
+        fail "${file} contains private key material"
+    fi
     case "${file}" in *.example) continue ;; esac
     if git show ":${file}" 2>/dev/null \
         | grep -nEi '^[[:space:]]*(password|passwd|token|api[_-]?key)[[:space:]]*:[[:space:]]*[^[:space:]#]' \

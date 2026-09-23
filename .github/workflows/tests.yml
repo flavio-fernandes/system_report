@@ -13,12 +13,14 @@ permissions:
 jobs:
   rust:
     name: Rust ${{ matrix.toolchain }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          - toolchain: "1.88.0"
+            experimental: false
           - toolchain: stable
             experimental: false
           - toolchain: beta
@@ -34,13 +36,15 @@ jobs:
       - name: test
         run: cargo +${{ matrix.toolchain }} test --locked
       - name: clippy
+        if: matrix.toolchain != '1.88.0'
         run: cargo +${{ matrix.toolchain }} clippy --locked --all-targets -- -D warnings
       - name: formatting
+        if: matrix.toolchain != '1.88.0'
         run: cargo +${{ matrix.toolchain }} fmt --all -- --check
 
   hygiene:
     name: shell syntax and secret guard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -68,5 +72,12 @@ jobs:
           if [ -n "${hits}" ]; then
             echo "${hits}"
             echo "::error::the line(s) above look like a committed secret"
+            exit 1
+          fi
+
+      - name: no private keys in tracked files
+        run: |
+          if git grep -IlE -- '^[[:space:]]*-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----[[:space:]]*$' .; then
+            echo "::error::private key material found in tracked files listed above"
             exit 1
           fi

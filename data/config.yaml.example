@@ -40,8 +40,8 @@ mqtt:
         enabled: false
         ca_certs: null               # null -> the system CA bundle
         certfile: null               # client certificate, if your broker wants one
-        keyfile: null
-        insecure: false              # true disables certificate checks. Testing only!
+        keyfile: null               # unencrypted PKCS#8; null uses combined certfile
+        insecure: false              # true disables hostname checks only. Testing only!
 
     # --- publishing behaviour ----------------------------------------------
     qos: 0                           # 0, 1 or 2, for the metric topics
@@ -54,13 +54,15 @@ mqtt:
     reconnect_max_delay_secs: 120
 
     # Safety net: if the connection has been down this long, throw the client
-    # away and build a new one. 0 disables it.
+    # away and build a new one. 0 disables it; ignored for clean_session: false.
     recreate_client_after_secs: 900
 
-    # How long to wait for the broker to acknowledge a qos>0 publish.
+    # How long to wait for a QoS 0 socket write or QoS 1/2 acknowledgement.
+    # A timeout does not cancel the publication.
     publish_timeout_secs: 10.0
 
-    # Upper bound on the library's internal queue. Reports produced while the
+    # Cap on outstanding QoS 1/2 publications (0 disables this cap). Transport
+    # flow control may also block QoS 0. Reports produced while the
     # broker is unreachable are dropped rather than buffered, so an outage
     # cannot turn this reporter into the memory hog it is meant to catch.
     max_queued_messages: 100

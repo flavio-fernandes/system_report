@@ -57,6 +57,24 @@ fn deep_merge(base: &mut Value, overlay: Value, path: &str, warnings: &mut Vec<S
         *base = overlay;
     }
 }
+// Anchored defaults can remain under an unknown key after a YAML merge.
+// Redact their password fields too, including nested diagnostic values.
+fn redact_passwords(value: &mut Value) {
+    match value {
+        Value::Mapping(entries) => {
+            for (key, value) in entries {
+                if key.as_str() == Some("password") && !value.is_null() {
+                    *value = Value::String(REDACTED.into());
+                } else {
+                    redact_passwords(value);
+                }
+            }
+        }
+        Value::Sequence(values) => values.iter_mut().for_each(redact_passwords),
+        Value::Tagged(value) => redact_passwords(&mut value.value),
+        _ => {}
+    }
+}
 fn dig<'a>(data: &'a Value, path: &str) -> &'a Value {
     path.split('.').fold(data, |node, part| &node[part])
 }
@@ -79,7 +97,7 @@ fn validate_shape(value: &Value, default: &Value, path: &str) -> Result<(), Conf
             }
         }
         Value::Null => {
-            if !value.is_null() && !value.as_str().is_some_and(|s| !s.trim().is_empty()) {
+            if !value.is_null() && value.as_str().is_none_or(|s| s.trim().is_empty()) {
                 return Err(fail(path, "expected a non-empty string or null"));
             }
         }
@@ -214,9 +232,7 @@ impl Config {
     }
     pub fn redacted(&self) -> Value {
         let mut data = self.data.clone();
-        if data["mqtt"]["password"].as_str().is_some() {
-            data["mqtt"]["password"] = Value::String(REDACTED.into());
-        }
+        redact_passwords(&mut data);
         data
     }
     pub fn client_id(&self) -> String {
@@ -246,7 +262,7 @@ impl Config {
             serde_yaml::from_str(crate::consts::DEFAULTS_YAML).expect("valid built-in defaults");
         let mut data = defaults.clone();
         // Do not include serde's error text: it can echo an inline password.
-        let raw: Value = serde_yaml::from_str(yaml).map_err(|e| {
+        let mut raw: Value = serde_yaml::from_str(yaml).map_err(|e| {
             let location = e
                 .location()
                 .map(|l| format!(" at line {}, column {}", l.line(), l.column()))
@@ -256,6 +272,8 @@ impl Config {
         if !raw.is_mapping() && !raw.is_null() {
             return Err(ConfigError("expected a mapping at the top level".into()));
         }
+        raw.apply_merge()
+            .map_err(|_| ConfigError("cannot apply YAML merge keys".into()))?;
         let mut warnings = Vec::new();
         if !raw.is_null() {
             deep_merge(&mut data, raw, "", &mut warnings);

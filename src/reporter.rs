@@ -125,14 +125,14 @@ impl<P: Publish> Reporter<P> {
             .count();
         self.reports += 1;
         log::info!(
-            "report #{}: published {}/{} value(s)",
+            "report #{}: completed {}/{} publish(es) within timeout",
             self.reports,
             published,
             messages.len()
         );
         if let Some(notifier) = &mut self.notifier {
             notifier.status(&format!(
-                "reports={} published={}/{} connected={}",
+                "reports={} completed={}/{} connected={}",
                 self.reports,
                 published,
                 messages.len(),

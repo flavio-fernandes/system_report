@@ -70,7 +70,7 @@ plan to regress the series later.
 ## Requirements
 
 - Linux with `/proc/meminfo` and `/proc/uptime`
-- A current stable Rust toolchain (Rust 2024 edition) to build; no Python needed
+- Rust 1.88 or newer (Rust 2024 edition) to build; no Python needed
 - A C compiler, `pkg-config`, and OpenSSL development headers (on Debian/Ubuntu:
   `sudo apt-get install build-essential pkg-config libssl-dev`)
 - An MQTT broker you can reach; systemd is optional for foreground use
@@ -78,8 +78,21 @@ plan to regress the series later.
 MQTT uses `rumqttc`, YAML uses `serde_yaml`, and readiness uses `sd-notify`.
 TLS uses the system OpenSSL libraries and CA trust store. Build on the target
 Linux distribution (or a compatible one); a binary built against newer glibc or
-OpenSSL is not guaranteed to run on an old distribution. No MSRV or old-Ubuntu
-compatibility is claimed for the current locked dependencies.
+OpenSSL is not guaranteed to run on an old distribution. Rust 1.88 is the
+minimum supported Rust version (MSRV), checked on Linux in CI with the locked
+dependencies. This does not imply support for every older Linux distribution.
+Check `rustc --version`; distribution packages may be older. To install the
+minimum toolchain as your ordinary user:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/system-report-rustup.sh
+sh /tmp/system-report-rustup.sh --profile minimal --default-toolchain 1.88.0
+. "$HOME/.cargo/env"
+rustc --version
+```
+
+With an existing rustup installation, use `rustup toolchain install 1.88.0`
+and `cargo +1.88.0 build --release --locked`.
 
 ## Installation
 
@@ -136,10 +149,11 @@ the unit. The service executes the release binary directly with an explicit
 config path. Keep the checkout in place; after updates, rebuild as your ordinary
 user and run `sudo systemctl restart system_report.service`.
 
-Migrating from Python: stop the old service, build the Rust release, retain your
-existing `data/` configuration/secrets, then rerun the installer to replace the
-unit. The old virtualenv is no longer used and may be removed. YAML booleans
-must be `true` / `false` rather than YAML 1.1 `yes` / `no`.
+Migrating from Python: follow [the upgrade recipe](upgrade-from-python-recipe.md)
+for backup, configuration checks, service and broker verification, and rollback.
+Keep the Python virtualenv until those checks pass. The recipe remains a draft
+until exercised on a real host. YAML booleans must be `true` / `false` rather
+than YAML 1.1 `yes` / `no`.
 
 Watch the journal:
 
@@ -189,16 +203,16 @@ only carries what differs. `data/config.yaml.example` documents each one, and
 | `password` | `null` | inline; discouraged, warns at startup |
 | `tls.enabled` | `false` | turn on TLS |
 | `tls.ca_certs` | `null` | `null` means the system CA bundle |
-| `tls.certfile` / `tls.keyfile` | `null` | client certificate, if required |
-| `tls.insecure` | `false` | disables certificate checks. Testing only |
+| `tls.certfile` / `tls.keyfile` | `null` | PEM client certificate chain and unencrypted PKCS#8 key; omitted keyfile uses combined certfile |
+| `tls.insecure` | `false` | disables hostname verification only; CA validation remains enabled. Testing only |
 | `qos` | `0` | QoS for metric publishes |
 | `retain` | `false` | retain metric values (status is retained separately) |
 | `clean_session` | `true` | |
 | `reconnect_min_delay_secs` | `1` | backoff floor |
 | `reconnect_max_delay_secs` | `120` | backoff ceiling |
-| `recreate_client_after_secs` | `900` | rebuild the client after this long offline; `0` disables |
-| `publish_timeout_secs` | `10.0` | how long to wait for a QoS>0 acknowledgement |
-| `max_queued_messages` | `100` | cap on the library's internal queue |
+| `recreate_client_after_secs` | `900` | rebuild after this long offline for clean sessions; `0` disables; ignored for persistent sessions |
+| `publish_timeout_secs` | `10.0` | wait for QoS 0 socket write or QoS 1/2 acknowledgement; timeout is not cancellation |
+| `max_queued_messages` | `100` | maximum outstanding QoS 1/2 publications; `0` removes this cap; transport flow control still applies |
 
 ### topics
 
@@ -250,7 +264,10 @@ The point of this service is to still be publishing months from now.
 - **Belt and braces.** If the connection has been down for
   `recreate_client_after_secs`, the MQTT client object is thrown away and
   rebuilt, which recovers from a wedged socket or a dead network thread that a
-  plain reconnect loop would sit in forever.
+  plain reconnect loop would sit in forever. With `clean_session: false`, this
+  recreation is disabled to preserve unfinished broker exchanges and packet IDs.
+  Persistent sessions survive network reconnects within this process; protocol
+  state is not saved to disk across process restarts.
 - **Reports are dropped, not buffered.** While the broker is unreachable, the
   slot is skipped and logged; nothing accumulates. Memory stays flat through an
   outage, which is the whole point of a leak reporter. The Python implementation
@@ -282,7 +299,11 @@ The point of this service is to still be publishing months from now.
   Using the inline value logs a warning, as does a secret file that is readable
   beyond its owner.
 - **The systemd unit reads the env file as root** before dropping privileges,
-  so `data/system_report.env` can stay `chmod 600`.
+  so `data/system_report.env` can stay root-owned with `chmod 600`. In contrast,
+  the **service user** reads `mqtt.password_file`: that file must be owned/readable
+  by that user (normally mode 600), with searchable parent directories. The
+  installer does not change arbitrary password-file ownership. Use absolute
+  paths and check `sudo -u SERVICE_USER test -r /path/to/password`.
 - **Nothing is logged that should not be.** `--print-config` and the startup
   log redact the password.
 - **TLS is off by default because most home brokers are.** If you enable
@@ -306,6 +327,11 @@ sudo systemctl disable --now system_report.service
 sudo rm -f /etc/systemd/system/system_report.service
 sudo systemctl daemon-reload
 ```
+
+After uninstalling, `cargo clean` removes this checkout's Rust build artifacts.
+The old `env/` virtualenv can be removed after the rollback window has closed.
+Keep `data/`, external secrets/certificates, and backups until deliberately retired;
+removing the unit does not delete them.
 
 The retained `offline` status stays on the broker until someone clears it:
 
@@ -331,12 +357,13 @@ pull requests to `main`, plus manual dispatch and read-only repository access.
 
 | Job | What it covers |
 |---|---|
+| Rust 1.88 (minimum) | locked release build and all tests on Ubuntu 24.04 |
 | Rust stable | locked release build, all tests, warnings-denied clippy, rustfmt |
 | Rust beta (informational) | the same checks against the next Rust release; allowed to fail |
 | hygiene | shell syntax, installer/wrapper smoke tests, tracked-data and inline-secret guards |
 
-Rust stable/beta replace the Python interpreter and paho callback-API matrix;
-there is no Python dependency or claimed Rust minimum-version lane. To reproduce
+Rust checks replace the Python interpreter and paho callback-API matrix;
+there is no Python test dependency. To reproduce
 the stable job in a Linux container:
 
 ```bash
